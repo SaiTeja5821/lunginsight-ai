@@ -1,0 +1,27 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local SQLite DB (not committed — Vercel uses /tmp/user.db at runtime)
+user.db
+test_user.db
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+.eggs/
+
+# AI Studio internal artifacts & temp media (not needed for deployment)
+.aistudio/
+public/assets/aistudio/
+
+# OS
+Thumbs.db

@@ -1,0 +1,6 @@
+Method,Accuracy,Balanced Accuracy,Macro F1,Normal Recall,Tumour Recall,Normal Specificity,ROC AUC,Log Loss
+AdaBoost,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.15587361029769878
+Logistic Regression,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.0002691909833500869
+Six-Model Equal Ensemble,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.030475240308290536
+Six-Model F1-Weighted Ensemble,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.030571007134919538
+Six-Model Optimized Log-Loss Ensemble,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.004387671892996191

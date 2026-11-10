@@ -1,0 +1,61 @@
+Fold,Model,Accuracy,Balanced_Accuracy,Macro_F1,Normal_Recall,Tumour_Recall,ROC_AUC
+1,Five-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+1,Five-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+1,Five-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+1,Six-model Equal-weight,0.989247311827957,0.9939759036144578,0.9731601731601731,1.0,0.9879518072289156,1.0
+1,Six-model Adaptive f1,0.989247311827957,0.9939759036144578,0.9731601731601731,1.0,0.9879518072289156,1.0
+1,Six-model Adaptive balanced_accuracy,0.989247311827957,0.9939759036144578,0.9731601731601731,1.0,0.9879518072289156,1.0
+1,Decision Tree,0.989247311827957,0.95,0.9706901985502678,0.9,1.0,0.9500000000000001
+1,Random Forest,1.0,1.0,1.0,1.0,1.0,1.0
+1,XGBoost,0.989247311827957,0.9939759036144578,0.9731601731601731,1.0,0.9879518072289156,0.9987951807228916
+1,AdaBoost,0.989247311827957,0.95,0.9706901985502678,0.9,1.0,0.9500000000000001
+1,Gaussian NB,0.978494623655914,0.9879518072289157,0.9484478935698448,1.0,0.9759036144578314,0.991566265060241
+1,Logistic Regression,0.978494623655914,0.9879518072289157,0.9484478935698448,1.0,0.9759036144578314,1.0
+2,Five-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+2,Five-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+2,Five-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+2,Six-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+2,Six-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+2,Six-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+2,Decision Tree,1.0,1.0,1.0,1.0,1.0,1.0
+2,Random Forest,1.0,1.0,1.0,1.0,1.0,1.0
+2,XGBoost,1.0,1.0,1.0,1.0,1.0,1.0
+2,AdaBoost,1.0,1.0,1.0,1.0,1.0,1.0
+2,Gaussian NB,1.0,1.0,1.0,1.0,1.0,1.0
+2,Logistic Regression,1.0,1.0,1.0,1.0,1.0,1.0
+3,Five-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+3,Five-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+3,Five-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+3,Six-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+3,Six-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+3,Six-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+3,Decision Tree,1.0,1.0,1.0,1.0,1.0,1.0
+3,Random Forest,1.0,1.0,1.0,1.0,1.0,1.0
+3,XGBoost,1.0,1.0,1.0,1.0,1.0,1.0
+3,AdaBoost,1.0,1.0,1.0,1.0,1.0,1.0
+3,Gaussian NB,1.0,1.0,1.0,1.0,1.0,1.0
+3,Logistic Regression,1.0,1.0,1.0,1.0,1.0,1.0
+4,Five-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+4,Five-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+4,Five-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+4,Six-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+4,Six-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+4,Six-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+4,Decision Tree,1.0,1.0,1.0,1.0,1.0,1.0
+4,Random Forest,1.0,1.0,1.0,1.0,1.0,1.0
+4,XGBoost,1.0,1.0,1.0,1.0,1.0,1.0
+4,AdaBoost,1.0,1.0,1.0,1.0,1.0,1.0
+4,Gaussian NB,1.0,1.0,1.0,1.0,1.0,1.0
+4,Logistic Regression,1.0,1.0,1.0,1.0,1.0,1.0
+5,Five-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+5,Five-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+5,Five-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+5,Six-model Equal-weight,1.0,1.0,1.0,1.0,1.0,1.0
+5,Six-model Adaptive f1,1.0,1.0,1.0,1.0,1.0,1.0
+5,Six-model Adaptive balanced_accuracy,1.0,1.0,1.0,1.0,1.0,1.0
+5,Decision Tree,1.0,1.0,1.0,1.0,1.0,1.0
+5,Random Forest,1.0,1.0,1.0,1.0,1.0,1.0
+5,XGBoost,1.0,1.0,1.0,1.0,1.0,1.0
+5,AdaBoost,1.0,1.0,1.0,1.0,1.0,1.0
+5,Gaussian NB,1.0,1.0,1.0,1.0,1.0,1.0
+5,Logistic Regression,1.0,1.0,1.0,1.0,1.0,1.0

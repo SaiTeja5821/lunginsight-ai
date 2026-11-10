@@ -1,0 +1,1137 @@
+import sys as _sys
+
+# ── Allow `python app.py` to launch the app directly ────────────────
+if __name__ == "__main__":
+    _ctx = None
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx as _g
+        _ctx = _g()
+    except Exception:
+        pass
+    if _ctx is None:
+        import subprocess as _sp
+        from pathlib import Path as _P
+        _script = _P(__file__).resolve()
+        _sp.run([_sys.executable, "-m", "streamlit", "run", str(_script)], cwd=str(_script.parent))
+        _sys.exit(0)
+# ────────────────────────────────────────────────────────────────────
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import joblib
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+st.set_page_config(
+    page_title="LungInsight AI",
+    page_icon="🫁",
+    layout="wide"
+)
+
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "artifacts" / "lunginsight_ensemble.joblib"
+if not MODEL_PATH.exists():
+    MODEL_PATH = Path("artifacts/lunginsight_ensemble.joblib")
+
+st.title("🫁 LungInsight AI")
+st.subheader("Gene Expression Analysis & Research Support")
+
+st.write(
+    "Upload a compatible gene-expression CSV to generate research "
+    "predictions and explore local model explanations."
+)
+
+
+
+# ---------------------------------------------------------
+# 1. Load the saved model
+# ---------------------------------------------------------
+
+def _patch_model_compat(model):
+    if hasattr(model, "named_steps"):
+        for step in model.named_steps.values():
+            if hasattr(step, "statistics_"):
+                if not hasattr(step, "_fill_dtype"):
+                    step._fill_dtype = step.statistics_.dtype
+                if not hasattr(step, "_fit_dtype"):
+                    step._fit_dtype = step.statistics_.dtype
+    return model
+
+@st.cache_resource
+def load_artifact():
+    art = joblib.load(MODEL_PATH)
+    if isinstance(art, dict) and "models" in art:
+        for m in art["models"].values():
+            _patch_model_compat(m)
+    return art
+
+
+if not MODEL_PATH.exists():
+    st.error(f"Model artifact not found: {MODEL_PATH}")
+    st.stop()
+
+try:
+    artifact = load_artifact()
+except Exception as exc:
+    st.error(f"Could not load the saved model: {exc}")
+    st.stop()
+
+expected_features = list(artifact["feature_names"])
+model_names = artifact["model_names"]
+models = artifact["models"]
+weights = artifact["optimized_weights"]
+
+st.success("Saved ensemble loaded successfully.")
+
+# ---------------------------------------------------------
+# 2. Upload data
+# ---------------------------------------------------------
+
+st.header("1. Upload gene-expression data")
+
+uploaded_file = st.file_uploader(
+    "Choose a CSV file",
+    type=["csv"],
+    help=(
+        "Use one row per sample and one column per gene. "
+        "All gene features required by the trained model must be present."
+    )
+)
+
+if uploaded_file is not None:
+
+    # Invalidate old results if the uploaded file changes.
+    upload_signature = (uploaded_file.name, uploaded_file.size)
+
+    if st.session_state.get("upload_signature") != upload_signature:
+        st.session_state.pop("lunginsight_results", None)
+        st.session_state["upload_signature"] = upload_signature
+
+    try:
+        uploaded_df = pd.read_csv(uploaded_file)
+    except Exception as exc:
+        st.error(f"Could not read the CSV file: {exc}")
+        st.stop()
+
+    if uploaded_df.empty:
+        st.error("The uploaded CSV is empty.")
+        st.stop()
+
+    st.subheader("Data preview")
+    st.dataframe(uploaded_df.head(10), use_container_width=True)
+
+    st.write(
+        f"Rows: **{uploaded_df.shape[0]}** | "
+        f"Columns: **{uploaded_df.shape[1]}**"
+    )
+
+    # -----------------------------------------------------
+    # 3. Validate input
+    # -----------------------------------------------------
+
+    st.header("2. Validate uploaded data")
+
+    id_candidates = {
+        "sample_id", "sampleid", "sample", "id",
+        "sample_name", "patient_id"
+    }
+
+    id_column = next(
+        (
+            col for col in uploaded_df.columns
+            if str(col).strip().lower() in id_candidates
+        ),
+        None
+    )
+
+    if id_column is not None:
+        sample_ids = uploaded_df[id_column].astype(str).reset_index(drop=True)
+        feature_df = uploaded_df.drop(columns=[id_column]).copy()
+    else:
+        sample_ids = pd.Series(
+            [f"Sample_{i + 1}" for i in range(len(uploaded_df))]
+        )
+        feature_df = uploaded_df.copy()
+
+    if not feature_df.columns.is_unique:
+        st.error(
+            "Duplicate column names were found. Make every gene "
+            "column name unique."
+        )
+        st.stop()
+
+    missing_features = [
+        gene for gene in expected_features
+        if gene not in feature_df.columns
+    ]
+
+    if missing_features:
+        st.error(
+            f"Missing {len(missing_features)} required gene features. "
+            "The model cannot safely predict with this file."
+        )
+        st.write("Examples of missing gene names:")
+        st.code(", ".join(map(str, missing_features[:20])))
+        st.info(
+            "Use a dataset with the same gene identifiers as the "
+            "model's training data."
+        )
+        st.stop()
+
+    # Reorder features to match training order.
+    X_new = feature_df.loc[:, expected_features].copy()
+
+    original_values = X_new.copy()
+
+    for col in X_new.columns:
+        X_new[col] = pd.to_numeric(X_new[col], errors="coerce")
+
+    # Reject strings that cannot be converted to numeric values.
+    invalid_mask = (
+        X_new.isna()
+        & original_values.notna()
+        & original_values.astype(str).apply(
+            lambda col: col.str.strip().ne("")
+        )
+    )
+
+    if invalid_mask.any().any():
+        st.error(
+            "Non-numeric gene values were found. Correct these "
+            "values before uploading."
+        )
+        st.stop()
+
+    if np.isinf(X_new.to_numpy(dtype=float)).any():
+        st.error("Infinite values were found. Correct the CSV.")
+        st.stop()
+
+    if X_new.isna().all(axis=1).any():
+        st.error(
+            "At least one sample has no usable gene values. "
+            "Remove or correct that sample."
+        )
+        st.stop()
+
+    st.success(
+        f"Validation passed: all {len(expected_features)} required "
+        "gene features are present."
+    )
+
+    if X_new.isna().any().any():
+        st.info(
+            "Missing values were found. The saved pipelines' "
+            "imputers will handle them."
+        )
+
+    # -----------------------------------------------------
+    # 4. Generate predictions
+    # -----------------------------------------------------
+
+    st.header("3. Generate predictions")
+
+    if st.button("Predict samples", type="primary"):
+        try:
+            with st.spinner("Generating ensemble predictions..."):
+
+                model_probabilities = {}
+
+                for name in model_names:
+                    model = models[name]
+                    probabilities = model.predict_proba(X_new)
+
+                    positive_index = list(model.classes_).index(1)
+                    model_probabilities[name] = probabilities[
+                        :, positive_index
+                    ]
+
+                probability_matrix = np.column_stack([
+                    model_probabilities[name]
+                    for name in model_names
+                ])
+
+                weight_vector = np.array(
+                    [weights[name] for name in model_names],
+                    dtype=float
+                )
+
+                if (
+                    not np.isfinite(weight_vector).all()
+                    or not np.isclose(weight_vector.sum(), 1.0)
+                    or (weight_vector < 0).any()
+                ):
+                    st.error("Saved ensemble weights are invalid.")
+                    st.stop()
+
+                ensemble_probabilities = (
+                    probability_matrix @ weight_vector
+                )
+
+                predicted_labels = (
+                    ensemble_probabilities >= 0.5
+                ).astype(int)
+
+                results = pd.DataFrame({
+                    "Sample_ID": sample_ids.to_numpy(),
+                    "Tumour_Probability": ensemble_probabilities,
+                    "Predicted_Label": predicted_labels,
+                    "Prediction": [
+                        "Tumour" if label == 1 else "Normal"
+                        for label in predicted_labels
+                    ]
+                })
+
+                st.session_state["lunginsight_results"] = results
+
+        except Exception as exc:
+            st.error(f"Prediction failed: {exc}")
+            st.stop()
+
+    # Load results only after X_new and the uploaded file exist.
+    results = st.session_state.get("lunginsight_results")
+
+    # -----------------------------------------------------
+    # 5. Display results
+    # -----------------------------------------------------
+
+    if results is not None:
+
+        st.header("4. Prediction results")
+
+        tumour_count = int(
+            (results["Predicted_Label"] == 1).sum()
+        )
+        normal_count = int(
+            (results["Predicted_Label"] == 0).sum()
+        )
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Samples analysed", len(results))
+        col2.metric("Predicted tumour", tumour_count)
+        col3.metric("Predicted normal", normal_count)
+
+        display_results = results.copy()
+        display_results["Tumour_Probability"] = (
+            display_results["Tumour_Probability"] * 100
+        ).round(2)
+
+        st.dataframe(display_results, use_container_width=True)
+
+        st.download_button(
+            "Download predictions as CSV",
+            data=results.to_csv(index=False).encode("utf-8"),
+            file_name="lunginsight_predictions.csv",
+            mime="text/csv"
+        )
+
+        st.caption(
+            "Tumour probability is the ensemble's output, not a "
+            "calibrated clinical risk estimate."
+        )
+
+        # -------------------------------------------------
+        # 6. SHAP and LIME explanations
+        # -------------------------------------------------
+
+        st.header("5. Explain an individual prediction")
+
+        st.write(
+            "Select a sample to explore approximate local explanations "
+            "of the saved weighted ensemble."
+        )
+
+        sample_options = [
+            f"{i}: {sample_ids.iloc[i]}"
+            for i in range(len(X_new))
+        ]
+
+        selected_option = st.selectbox(
+            "Select a sample",
+            sample_options,
+            key="explain_sample"
+        )
+
+        selected_index = int(selected_option.split(":")[0])
+
+        selected_sample = X_new.iloc[[selected_index]]
+        selected_prediction = results.iloc[selected_index]
+
+        st.write(
+            f"**Prediction:** {selected_prediction['Prediction']}"
+        )
+        st.write(
+            "**Ensemble tumour probability:** "
+            f"{selected_prediction['Tumour_Probability']:.2%}"
+        )
+
+        st.warning(
+            "These explanations use a limited set of candidate genes "
+            "and hold other genes fixed. They are approximate model "
+            "explanations, not evidence of biological causation."
+        )
+
+        # Rank genes by weighted frequency of selection.
+        gene_scores = {}
+
+        for name in model_names:
+            model_weight = float(weights[name])
+
+            if model_weight <= 0:
+                continue
+
+            selector = models[name].named_steps["select"]
+            selected_indices = selector.get_support(indices=True)
+
+            for idx in selected_indices:
+                gene = expected_features[idx]
+                gene_scores[gene] = (
+                    gene_scores.get(gene, 0.0) + model_weight
+                )
+
+        candidate_genes = [
+            gene
+            for gene, _ in sorted(
+                gene_scores.items(),
+                key=lambda item: item[1],
+                reverse=True
+            )[:12]
+        ]
+
+        if len(candidate_genes) < 2:
+            st.warning(
+                "There are not enough candidate genes for explanations."
+            )
+        else:
+            candidate_indices = [
+                expected_features.index(gene)
+                for gene in candidate_genes
+            ]
+
+            # Candidate matrix used for local explanations.
+            candidate_data = X_new.iloc[
+                :, candidate_indices
+            ].to_numpy(dtype=float)
+
+            # Fill missing values for explainer sampling.
+            # Model predictions still use each saved pipeline's imputer.
+            medians = np.nanmedian(candidate_data, axis=0)
+            medians = np.where(np.isfinite(medians), medians, 0.0)
+
+            candidate_data_filled = np.where(
+                np.isfinite(candidate_data),
+                candidate_data,
+                medians
+            )
+
+            selected_candidates = candidate_data_filled[
+                selected_index
+            ]
+
+            base_values = selected_sample.to_numpy(dtype=float)[0]
+
+            st.caption(
+                "Candidate genes are selected using their weighted "
+                "frequency across nonzero-weight model pipelines."
+            )
+
+            st.write("Candidate genes:", ", ".join(candidate_genes))
+
+            def ensemble_probability_for_candidates(candidate_matrix):
+                candidate_matrix = np.asarray(
+                    candidate_matrix, dtype=float
+                )
+
+                if candidate_matrix.ndim == 1:
+                    candidate_matrix = candidate_matrix.reshape(1, -1)
+
+                # Keep all non-candidate genes at the selected sample's
+                # values; vary only the candidate genes.
+                full_matrix = np.tile(
+                    base_values, (candidate_matrix.shape[0], 1)
+                )
+
+                full_matrix[:, candidate_indices] = candidate_matrix
+
+                full_df = pd.DataFrame(
+                    full_matrix,
+                    columns=expected_features
+                )
+
+                all_probabilities = []
+
+                for name in model_names:
+                    model = models[name]
+                    p = model.predict_proba(full_df)
+                    positive_index = list(model.classes_).index(1)
+                    all_probabilities.append(p[:, positive_index])
+
+                probability_matrix = np.column_stack(all_probabilities)
+
+                current_weights = np.array(
+                    [weights[name] for name in model_names],
+                    dtype=float
+                )
+
+                return probability_matrix @ current_weights
+
+            if st.button(
+                "Generate SHAP and LIME explanations",
+                key="generate_explanations"
+            ):
+                try:
+                    import shap
+                    from lime.lime_tabular import LimeTabularExplainer
+
+                    with st.spinner(
+                        "Calculating explanations. This may take a while..."
+                    ):
+                        # Use a small deterministic background set.
+                        rng = np.random.default_rng(42)
+                        background_count = min(
+                            10, len(candidate_data_filled)
+                        )
+
+                        background_indices = rng.choice(
+                            len(candidate_data_filled),
+                            size=background_count,
+                            replace=False
+                        )
+
+                        background = candidate_data_filled[
+                            background_indices
+                        ]
+
+                        # SHAP KernelExplainer explains the weighted
+                        # ensemble's probability output.
+                        shap_explainer = shap.KernelExplainer(
+                            ensemble_probability_for_candidates,
+                            background
+                        )
+
+                        shap_values = shap_explainer.shap_values(
+                            selected_candidates.reshape(1, -1),
+                            nsamples=100
+                        )
+
+                        shap_array = np.asarray(shap_values)
+                        shap_array = np.squeeze(shap_array)
+
+                        if shap_array.ndim > 1:
+                            shap_array = shap_array[-1]
+
+                        if shap_array.size != len(candidate_genes):
+                            raise ValueError(
+                                "Unexpected SHAP output shape: "
+                                f"{shap_array.shape}"
+                            )
+
+                        shap_df = pd.DataFrame({
+                            "Gene": candidate_genes,
+                            "SHAP contribution": shap_array.astype(float)
+                        })
+
+                        shap_df["Absolute contribution"] = (
+                            shap_df["SHAP contribution"].abs()
+                        )
+
+                        shap_df = shap_df.sort_values(
+                            "Absolute contribution",
+                            ascending=False
+                        )
+
+                        st.subheader("SHAP: local contributions")
+
+                        st.write(
+                            "Positive values push the model score upward; "
+                            "negative values push it downward relative to "
+                            "the explainer's background."
+                        )
+
+                        shap_plot_df = shap_df.sort_values(
+                            "SHAP contribution"
+                        ).set_index("Gene")
+
+                        fig, ax = plt.subplots(figsize=(9, 5))
+                        shap_plot_df["SHAP contribution"].plot.barh(
+                            ax=ax
+                        )
+                        ax.set_xlabel(
+                            "Contribution to ensemble tumour probability"
+                        )
+                        ax.set_ylabel("Candidate gene")
+                        ax.set_title("SHAP local explanation")
+                        fig.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+
+                        st.dataframe(
+                            shap_df,
+                            use_container_width=True
+                        )
+
+                        # LIME approximates the same ensemble score.
+                        lime_explainer = LimeTabularExplainer(
+                            training_data=candidate_data_filled,
+                            feature_names=candidate_genes,
+                            mode="regression",
+                            discretize_continuous=False,
+                            random_state=42
+                        )
+
+                        lime_explanation = lime_explainer.explain_instance(
+                            data_row=selected_candidates,
+                            predict_fn=ensemble_probability_for_candidates,
+                            num_features=len(candidate_genes),
+                            num_samples=1000
+                        )
+
+                        lime_df = pd.DataFrame(
+                            lime_explanation.as_list(),
+                            columns=[
+                                "Gene feature",
+                                "LIME contribution"
+                            ]
+                        )
+
+                        st.subheader("LIME: local approximation")
+
+                        lime_plot_df = lime_df.set_index("Gene feature")
+
+                        fig, ax = plt.subplots(figsize=(9, 5))
+                        lime_plot_df.sort_values(
+                            "LIME contribution"
+                        )["LIME contribution"].plot.barh(ax=ax)
+                        ax.set_xlabel(
+                            "Contribution in local surrogate model"
+                        )
+                        ax.set_ylabel("Gene feature")
+                        ax.set_title("LIME local explanation")
+                        fig.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+
+                        st.dataframe(
+                            lime_df,
+                            use_container_width=True
+                        )
+
+                except Exception as exc:
+                    st.error(
+                        "Explanation generation failed. "
+                        f"Error details: {exc}"
+                    )
+
+st.caption(
+    "LungInsight AI is a research prototype. Results require "
+    "independent validation and must not be used as a clinical diagnosis."
+)
+
+
+
+import streamlit as st
+
+st.set_page_config(
+    page_title="LungInsight AI",
+    page_icon="🧬",
+    layout="wide"
+)
+
+# ==========================================
+# CHATBOT STYLING — SOLID, OPAQUE PANEL
+# ==========================================
+
+st.markdown("""
+<style>
+
+/* Floating chatbot button */
+.st-key-chat_launcher {
+    position: fixed !important;
+    bottom: 22px !important;
+    right: 24px !important;
+    z-index: 10000 !important;
+}
+
+.st-key-chat_launcher button {
+    width: 62px !important;
+    height: 62px !important;
+    border-radius: 50% !important;
+    background: #147D68 !important;
+    color: #FFFFFF !important;
+    border: 2px solid #FFFFFF !important;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25) !important;
+    font-size: 27px !important;
+}
+
+/* Main chatbot panel: completely opaque */
+/* Chat panel: keep the full panel inside the viewport */
+.st-key-chat_panel {
+    position: fixed !important;
+    right: 24px !important;
+    bottom: 88px !important;
+    top: auto !important;
+
+    width: 380px !important;
+    max-width: calc(100vw - 32px) !important;
+    height: min(680px, calc(100vh - 120px)) !important;
+    max-height: calc(100vh - 120px) !important;
+
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    z-index: 9999 !important;
+
+    background: #FFFFFF !important;
+    opacity: 1 !important;
+    color: #20252B !important;
+
+    border: 1px solid #D5E2DE !important;
+    border-radius: 18px !important;
+    padding: 15px !important;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22) !important;
+    box-sizing: border-box !important;
+    isolation: isolate !important;
+}
+
+/* Green header: fully visible and compact */
+.chat-title {
+    background: linear-gradient(135deg, #12483E, #16836C) !important;
+    color: #FFFFFF !important;
+    padding: 14px 16px !important;
+    border-radius: 13px !important;
+    margin-bottom: 12px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    overflow-wrap: anywhere !important;
+}
+
+.chat-title h3 {
+    color: #FFFFFF !important;
+    margin: 0 !important;
+    font-size: 21px !important;
+    line-height: 1.3 !important;
+}
+
+.chat-title p {
+    color: #E1F4EF !important;
+    font-size: 12px !important;
+    line-height: 1.4 !important;
+    margin: 6px 0 0 0 !important;
+}
+
+/* Mobile screens */
+@media (max-width: 480px) {
+    .st-key-chat_panel {
+        right: 8px !important;
+        bottom: 82px !important;
+        width: calc(100vw - 16px) !important;
+        max-width: calc(100vw - 16px) !important;
+        height: calc(100vh - 110px) !important;
+        max-height: calc(100vh - 110px) !important;
+    }
+}
+/* Keep nested Streamlit containers from showing the dashboard through */
+.st-key-chat_panel [data-testid="stVerticalBlock"],
+.st-key-chat_panel [data-testid="stVerticalBlockBorderWrapper"],
+.st-key-chat_panel [data-testid="stForm"] {
+    background-color: #FFFFFF !important;
+    opacity: 1 !important;
+}
+
+/* Chat conversation area */
+.st-key-chat_panel [data-testid="stChatMessage"] {
+    background-color: #F2F6F5 !important;
+    color: #20252B !important;
+    border: 1px solid #E1E9E6 !important;
+    border-radius: 12px !important;
+    padding: 10px 12px !important;
+    margin-bottom: 8px !important;
+}
+
+/* Message text */
+.st-key-chat_panel [data-testid="stChatMessage"] p,
+.st-key-chat_panel [data-testid="stMarkdownContainer"] p,
+.st-key-chat_panel label {
+    color: #20252B !important;
+}
+
+/* Input field */
+.st-key-chat_panel [data-testid="stTextInput"] input {
+    background-color: #F1F3F6 !important;
+    color: #20252B !important;
+    border: 1px solid #D4D9DF !important;
+    border-radius: 10px !important;
+    opacity: 1 !important;
+}
+
+/* Input placeholder */
+.st-key-chat_panel [data-testid="stTextInput"] input::placeholder {
+    color: #737B85 !important;
+    opacity: 1 !important;
+}
+
+/* Chatbot buttons */
+.st-key-chat_panel .stButton button,
+.st-key-chat_panel [data-testid="stFormSubmitButton"] button {
+    background-color: #FFFFFF !important;
+    color: #25312E !important;
+    border: 1px solid #D5DEDA !important;
+    border-radius: 10px !important;
+    white-space: normal !important;
+    text-align: left !important;
+    min-height: 42px !important;
+}
+
+/* Hover effect */
+.st-key-chat_panel .stButton button:hover,
+.st-key-chat_panel [data-testid="stFormSubmitButton"] button:hover {
+    background-color: #E8F5F0 !important;
+    border-color: #147D68 !important;
+    color: #12483E !important;
+}
+
+/* Chat header */
+.chat-title {
+    background: linear-gradient(135deg, #12483E, #16836C) !important;
+    color: #FFFFFF !important;
+    padding: 15px !important;
+    border-radius: 13px !important;
+    margin-bottom: 12px !important;
+}
+
+.chat-title h3 {
+    color: #FFFFFF !important;
+    margin: 0 !important;
+}
+
+.chat-title p {
+    color: #E1F4EF !important;
+    font-size: 12px !important;
+    margin: 5px 0 0 0 !important;
+}
+
+/* Clear conversation button */
+.st-key-chat_panel [data-testid="stButton"] button {
+    transition: background-color 0.15s ease-in-out !important;
+}
+
+/* Smaller screens */
+@media (max-width: 480px) {
+    .st-key-chat_panel {
+        right: 8px !important;
+        bottom: 84px !important;
+        width: calc(100vw - 16px) !important;
+        max-width: calc(100vw - 16px) !important;
+        height: 78vh !important;
+    }
+
+    .st-key-chat_launcher {
+        right: 16px !important;
+        bottom: 16px !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# ==========================================
+# DASHBOARD PLACEHOLDER
+# Keep your real dashboard in your main app.py
+# ==========================================
+
+
+
+
+# ==========================================
+# KNOWLEDGE BASE
+# ==========================================
+
+gene_answers = {
+    "What is EGFR?":
+        "EGFR encodes a cell-surface receptor involved in cell growth "
+        "and signalling. Certain EGFR alterations are important in "
+        "lung cancer research.",
+
+    "What is TP53?":
+        "TP53 encodes the p53 tumour-suppressor protein, which helps "
+        "regulate DNA damage responses, cell-cycle control and cell death.",
+
+    "What is KRAS?":
+        "KRAS encodes a protein involved in cell-growth signalling. "
+        "Certain KRAS mutations are relevant to lung cancer biology.",
+
+    "What is ALK?":
+        "ALK encodes a receptor tyrosine kinase. Certain ALK gene "
+        "rearrangements can drive a subset of lung cancers.",
+
+    "What is ROS1?":
+        "ROS1 encodes a receptor tyrosine kinase. ROS1 gene fusions "
+        "are found in a subset of lung cancers.",
+
+    "What is BRAF?":
+        "BRAF encodes a protein in a cell-signalling pathway. Some "
+        "BRAF mutations are studied in lung adenocarcinoma.",
+
+    "What is MET?":
+        "MET encodes a receptor involved in cell growth and survival. "
+        "Some MET alterations are relevant to lung cancer.",
+
+    "What is ERBB2 (HER2)?":
+        "ERBB2, also called HER2, encodes a receptor tyrosine kinase "
+        "involved in cell signalling.",
+
+    "What is STK11?":
+        "STK11 encodes a tumour-suppressor protein involved in "
+        "cellular energy regulation and growth control.",
+
+    "What is KEAP1?":
+        "KEAP1 helps regulate the NRF2 pathway, which is involved "
+        "in cellular responses to oxidative stress."
+}
+
+quick_answers = {
+    "How does LungInsight AI work?":
+        "LungInsight AI analyzes gene-expression data using machine "
+        "learning to classify samples. It is a research prototype.",
+
+    "What does model accuracy mean?":
+        "Accuracy measures the fraction of predictions that are correct. "
+        "Because our dataset is imbalanced, also examine balanced "
+        "accuracy, macro F1, and recall for each class.",
+
+    "What is LUAD vs LUSC?":
+        "LUAD means lung adenocarcinoma, while LUSC means lung "
+        "squamous cell carcinoma. Our current dataset focuses on LUAD.",
+
+    "How does our ensemble work?":
+        "An ensemble combines predictions from multiple models. "
+        "Our project evaluates Decision Tree, Random Forest, XGBoost, "
+        "AdaBoost, Gaussian Naive Bayes and Logistic Regression.",
+
+    "What are SHAP and LIME?":
+        "SHAP and LIME help explain which features influenced a model "
+        "prediction. They describe model behaviour, not biological causation.",
+
+    "Which genes influenced my prediction?":
+        "This requires the actual explanation output for a selected sample. "
+        "This demo is not connected to your trained model, so it cannot "
+        "reliably identify those genes yet."
+}
+
+
+def get_answer(question):
+    # Exact answers from the knowledge base
+    if question in gene_answers:
+        return gene_answers[question]
+
+    if question in quick_answers:
+        return quick_answers[question]
+
+    q = question.lower().strip()
+
+    # Medical safety
+    if any(word in q for word in [
+        "diagnosis", "diagnose", "treatment", "cure", "symptom"
+    ]):
+        return (
+            "I can explain general research concepts, but I cannot "
+            "diagnose cancer or recommend treatment. A model prediction "
+            "is not a medical diagnosis. Please consult a qualified "
+            "healthcare professional for personal medical concerns."
+        )
+
+    # General gene questions
+    if any(word in q for word in [
+        "gene", "biomarker", "egfr", "tp53", "kras", "alk",
+        "ros1", "braf", "met", "stk11", "keap1", "her2", "erbb2"
+    ]):
+        return (
+            "I can explain general gene biology. Try asking about "
+            "EGFR, TP53, KRAS, ALK, ROS1, BRAF, MET, ERBB2, STK11 "
+            "or KEAP1. I cannot identify your model's top genes without "
+            "its actual feature-selection or explanation results."
+        )
+
+    # Model questions
+    if any(word in q for word in [
+        "accuracy", "performance", "f1", "auc", "model", "ensemble"
+    ]):
+        return (
+            "I can explain the models and evaluation metrics. For actual "
+            "performance values, please consult the measured results "
+            "in the dashboard. This chatbot does not load your results files."
+        )
+
+    # General fallback
+    return (
+        "Thanks for your question! 😊 I'm currently a guided LungInsight "
+        "assistant and may not know every open-ended question.\n\n"
+        "**You can ask me about:**\n"
+        "- LungInsight AI and its workflow\n"
+        "- Lung cancer genes and biomarkers\n"
+        "- LUAD vs LUSC\n"
+        "- Ensemble models and performance metrics\n"
+        "- SHAP and LIME\n\n"
+        "Try rephrasing your question or select one of the options above. "
+        "Later, we can connect a local language model for more flexible answers."
+    )
+
+
+# ==========================================
+# SESSION STATE
+# ==========================================
+
+if "chat_open" not in st.session_state:
+    st.session_state.chat_open = False
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [{
+        "role": "assistant",
+        "content": (
+            "Hi! 👋 Welcome to LungInsight AI.\n\n"
+            "Choose a suggested question below or type your own question."
+        )
+    }]
+
+
+# ==========================================
+# FLOATING CHAT ICON
+# ==========================================
+
+if st.button(
+    "💬",
+    key="chat_launcher",
+    help="Open LungInsight Assistant"
+):
+    st.session_state.chat_open = not st.session_state.chat_open
+
+
+# ==========================================
+# CHAT WINDOW
+# ORDER: HEADER → QUESTIONS → CONVERSATION → INPUT
+# ==========================================
+
+if st.session_state.chat_open:
+
+    with st.container(key="chat_panel"):
+
+        # Header
+        header_col, close_col = st.columns([5, 1])
+
+        with header_col:
+            st.markdown("""
+            <div class="chat-title">
+                <h3>🧬 LungInsight Assistant</h3>
+                <p>Research guide · Here to help you explore</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with close_col:
+            if st.button("✕", key="chat_close", help="Close assistant"):
+                st.session_state.chat_open = False
+                st.rerun()
+
+        # ----------------------------------
+        # 1. SUGGESTED QUESTIONS FIRST
+        # ----------------------------------
+
+        st.markdown("**✨ Quick questions**")
+
+        general_questions = list(quick_answers.keys())
+
+        for i in range(0, len(general_questions), 2):
+            cols = st.columns(2)
+
+            for j, col in enumerate(cols):
+                idx = i + j
+
+                if idx < len(general_questions):
+                    question = general_questions[idx]
+
+                    if col.button(
+                        question,
+                        key=f"general_{idx}",
+                        use_container_width=True
+                    ):
+                        st.session_state.messages.extend([
+                            {"role": "user", "content": question},
+                            {
+                                "role": "assistant",
+                                "content": get_answer(question)
+                            }
+                        ])
+                        st.rerun()
+
+        # ----------------------------------
+        # 2. GENE EXPLORER
+        # ----------------------------------
+
+        with st.expander("🧬 Explore gene questions"):
+            for i, question in enumerate(gene_answers.keys()):
+                if st.button(
+                    question,
+                    key=f"gene_{i}",
+                    use_container_width=True
+                ):
+                    st.session_state.messages.extend([
+                        {"role": "user", "content": question},
+                        {
+                            "role": "assistant",
+                            "content": get_answer(question)
+                        }
+                    ])
+                    st.rerun()
+
+        st.divider()
+
+        # ----------------------------------
+        # 3. CONVERSATION BELOW QUESTIONS
+        # ----------------------------------
+
+        st.markdown("**💭 Conversation**")
+
+        with st.container(height=210):
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+
+        # ----------------------------------
+        # 4. CUSTOM QUESTION INPUT
+        # ----------------------------------
+
+        with st.form("chat_question_form", clear_on_submit=True):
+            custom_question = st.text_input(
+                "Ask your own question",
+                placeholder="e.g. What is the role of EGFR?"
+            )
+
+            send = st.form_submit_button(
+                "Send ➤",
+                use_container_width=True
+            )
+
+            if send and custom_question.strip():
+                question = custom_question.strip()
+
+                st.session_state.messages.extend([
+                    {"role": "user", "content": question},
+                    {
+                        "role": "assistant",
+                        "content": get_answer(question)
+                    }
+                ])
+                st.rerun()
+
+        # ----------------------------------
+        # 5. CLEAR CHAT
+        # ----------------------------------
+
+        if st.button("Clear conversation", key="chat_clear"):
+            st.session_state.messages = [{
+                "role": "assistant",
+                "content": (
+                    "Hi! 👋 Welcome to LungInsight AI. "
+                    "Choose a suggested question or type your own."
+                )
+            }]
+            st.rerun()

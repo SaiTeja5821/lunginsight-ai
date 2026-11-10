@@ -1,0 +1,24 @@
+# Exclude large training datasets — not needed at runtime
+dataset/
+dataset_luad_lusc/
+external_dataset/
+evaluation_oof/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Keep artifacts/ (model files needed by app)
+!artifacts/
+

@@ -49,6 +49,9 @@ class _ByteCollector(io.RawIOBase):
         self._buf.extend(b)
         return len(b)
 
+    def writable(self) -> bool:
+        return True
+
     def getvalue(self) -> bytes:
         return bytes(self._buf)
 

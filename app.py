@@ -22,8 +22,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "user.db")
-ANALYSIS_FOLDER = os.path.join(BASE_DIR, "analysis_data")
+# Check if DB_PATH is explicitly set in environment (e.g. /tmp/user.db for Vercel/serverless)
+DB_PATH = os.environ.get("DB_PATH") or os.path.join(BASE_DIR, "user.db")
+ANALYSIS_FOLDER = os.environ.get("ANALYSIS_FOLDER") or os.path.join(BASE_DIR, "analysis_data")
 PORT = int(os.environ.get("PORT", 3000))
 
 
